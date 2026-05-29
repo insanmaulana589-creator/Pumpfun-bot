@@ -12,15 +12,51 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 
 scan_active = False
 buy_amount = 0.2
-max_mcap = 50000
 tracked_tokens = {}
+
+async def check_token_safety(mint, session):
+    try:
+        url = f"https://frontend-api.pump.fun/coins/{mint}"
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+
+            mcap = data.get("usd_market_cap", 0)
+            nsfw = data.get("nsfw", True)
+            complete = data.get("complete", False)
+            total_supply = data.get("total_supply", 1)
+            dev_holdings = data.get("creator_token_holdings", 0)
+            reply_count = data.get("reply_count", 0)
+
+            if nsfw:
+                return None
+            if complete:
+                return None
+            if mcap < 5000 or mcap > 50000:
+                return None
+            if total_supply > 0:
+                dev_pct = (dev_holdings / total_supply) * 100
+                if dev_pct > 10:
+                    return None
+
+            return {
+                "mcap": mcap,
+                "reply_count": reply_count,
+                "dev_pct": dev_pct if total_supply > 0 else 0,
+            }
+    except Exception as e:
+        logging.error(f"Safety check error: {e}")
+        return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Pumpfun Trading Bot\n\n"
-        "Setting:\n"
-        "Buy: 0.2 SOL\n"
-        "Max MCap: $50,000\n"
+        "Pumpfun Safety Bot\n\n"
+        "Filter aktif:\n"
+        "MCap $5k-$50k\n"
+        "Dev holdings kurang dari 10 persen\n"
+        "Bukan NSFW\n"
+        "Belum bonding curve selesai\n"
         "Take Profit: 2x\n\n"
         "/scan - Mulai scan\n"
         "/stopscan - Stop scan\n"
@@ -50,8 +86,10 @@ async def scan_tokens(chat_id, app):
     seen_mints = set()
 
     await app.bot.send_message(chat_id,
-        "Scanning via WebSocket...\n"
-        "Filter: MCap < $50,000 | TP: 2x"
+        "Scanning dimulai dengan filter safety!\n"
+        "MCap $5k-$50k\n"
+        "Dev kurang dari 10 persen\n"
+        "Anti NSFW dan rugpull"
     )
 
     uri = "wss://pumpportal.fun/api/data"
@@ -63,44 +101,53 @@ async def scan_tokens(chat_id, app):
                 await ws.send(json.dumps(payload))
                 await app.bot.send_message(chat_id, "Terhubung ke Pump.fun!")
 
-                while scan_active:
-                    try:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=30)
-                        data = json.loads(msg)
+                async with aiohttp.ClientSession() as session:
+                    while scan_active:
+                        try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                            data = json.loads(msg)
 
-                        mint = data.get("mint", "")
-                        if not mint or mint in seen_mints:
+                            mint = data.get("mint", "")
+                            if not mint or mint in seen_mints:
+                                continue
+
+                            name = data.get("name", "Unknown")
+                            symbol = data.get("symbol", "???")
+
+                            seen_mints.add(mint)
+
+                            await asyncio.sleep(2)
+                            safety = await check_token_safety(mint, session)
+
+                            if not safety:
+                                continue
+
+                            mcap = safety["mcap"]
+                            dev_pct = safety["dev_pct"]
+                            replies = safety["reply_count"]
+                            target_mcap = mcap * 2
+
+                            tracked_tokens[mint] = {
+                                "name": name,
+                                "symbol": symbol,
+                                "buy_mcap": mcap,
+                                "target_mcap": target_mcap,
+                            }
+
+                            msg_text = (
+                                f"TOKEN AMAN DITEMUKAN!\n\n"
+                                f"Nama: {name} ({symbol})\n"
+                                f"MCap: ${mcap:,.0f}\n"
+                                f"Dev holdings: {dev_pct:.1f} persen\n"
+                                f"Replies: {replies}\n"
+                                f"Target 2x: ${target_mcap:,.0f}\n"
+                                f"Simulasi buy {buy_amount} SOL\n"
+                                f"Link: pump.fun/{mint}"
+                            )
+                            await app.bot.send_message(chat_id, msg_text)
+
+                        except asyncio.TimeoutError:
                             continue
-
-                        name = data.get("name", "Unknown")
-                        symbol = data.get("symbol", "???")
-                        mcap = data.get("marketCapSol", 0) * 150
-
-                        if mcap > max_mcap:
-                            continue
-
-                        seen_mints.add(mint)
-                        target_mcap = mcap * 2
-
-                        tracked_tokens[mint] = {
-                            "name": name,
-                            "symbol": symbol,
-                            "buy_mcap": mcap,
-                            "target_mcap": target_mcap,
-                        }
-
-                        msg_text = (
-                            f"TOKEN BARU!\n\n"
-                            f"Nama: {name} ({symbol})\n"
-                            f"MCap: ${mcap:,.0f}\n"
-                            f"Target 2x: ${target_mcap:,.0f}\n"
-                            f"Simulasi buy {buy_amount} SOL\n"
-                            f"Link: pump.fun/{mint}"
-                        )
-                        await app.bot.send_message(chat_id, msg_text)
-
-                    except asyncio.TimeoutError:
-                        continue
 
         except Exception as e:
             logging.error(f"WebSocket error: {e}")
