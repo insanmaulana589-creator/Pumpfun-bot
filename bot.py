@@ -80,8 +80,6 @@ async def scan_tokens(chat_id, app):
                                 continue
                             if not mcap or mcap > max_mcap:
                                 continue
-                            if replies < 1:
-                                continue
 
                             seen_mints.add(mint)
                             target_mcap = mcap * 2
