@@ -59,7 +59,8 @@ async def scan_tokens(chat_id, app):
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    "https://frontend-api.pump.fun/coins/latest",
+                    "https://client-api-2-74b1891ee9f9.herokuapp.com/coins/latest",
+
                     params={"limit": 10, "includeNsfw": "false"},
                     timeout=aiohttp.ClientTimeout(total=10)
                 ) as resp:
