@@ -2,7 +2,6 @@ import os
 import logging
 import asyncio
 import json
-import aiohttp
 import websockets
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -26,44 +25,39 @@ async def stopscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def scan_tokens(chat_id, app):
     global scan_active
     seen = set()
-    await app.bot.send_message(chat_id, "Scanning...")
+    await app.bot.send_message(chat_id, "Scanning realtime...")
     while scan_active:
         try:
             async with websockets.connect("wss://pumpportal.fun/api/data") as ws:
                 await ws.send(json.dumps({"method": "subscribeNewToken"}))
-                async with aiohttp.ClientSession() as session:
-                    while scan_active:
-                        try:
-                            data = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
-                            mint = data.get("mint", "")
-                            if not mint or mint in seen:
-                                continue
-                            seen.add(mint)
-                            name = data.get("name", "?")
-                            symbol = data.get("symbol", "?")
-                            async with session.get(f"https://frontend-api.pump.fun/coins/{mint}", timeout=aiohttp.ClientTimeout(total=5)) as r:
-                                if r.status != 200:
-                                    continue
-                                info = await r.json()
-                                mcap = info.get("usd_market_cap", 0)
-                                twitter = info.get("twitter", "")
-                                nsfw = info.get("nsfw", True)
-                                if nsfw or not twitter or mcap > 100000:
-                                    continue
-                                await app.bot.send_message(chat_id,
-                                    f"TOKEN DITEMUKAN!\n"
-                                    f"{name} ({symbol})\n"
-                                    f"MCap: ${mcap:,.0f}\n"
-                                    f"Target 2x: ${mcap*2:,.0f}\n"
-                                    f"Twitter: {twitter}\n"
-                                    f"pump.fun/{mint}"
-                                )
-                        except asyncio.TimeoutError:
+                while scan_active:
+                    try:
+                        data = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
+                        mint = data.get("mint", "")
+                        if not mint or mint in seen:
                             continue
+                        seen.add(mint)
+                        name = data.get("name", "?")
+                        symbol = data.get("symbol", "?")
+                        twitter = data.get("twitter", "")
+                        website = data.get("website", "")
+                        mcap_sol = data.get("initialBuy", 0)
+                        if not twitter:
+                            continue
+                        await app.bot.send_message(chat_id,
+                            f"TOKEN BARU!\n"
+                            f"{name} ({symbol})\n"
+                            f"Twitter: {twitter}\n"
+                            f"Website: {website if website else 'Tidak ada'}\n"
+                            f"pump.fun/{mint}\n"
+                            f"Target 2x - keputusan di tangan Anda!"
+                        )
+                    except asyncio.TimeoutError:
+                        continue
         except Exception as e:
             logging.error(e)
             if scan_active:
-                await asyncio.sleep(5)
+                await asyncio.sleep(3)
 
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global scan_active
