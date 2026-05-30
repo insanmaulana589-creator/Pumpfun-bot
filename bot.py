@@ -41,7 +41,6 @@ async def scan_tokens(chat_id, app):
                             seen.add(mint)
                             name = data.get("name", "?")
                             symbol = data.get("symbol", "?")
-                            await asyncio.sleep(2)
                             async with session.get(f"https://frontend-api.pump.fun/coins/{mint}", timeout=aiohttp.ClientTimeout(total=5)) as r:
                                 if r.status != 200:
                                     continue
