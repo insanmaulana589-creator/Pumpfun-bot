@@ -37,4 +37,49 @@ async def scan_tokens(chat_id, app):
                             data = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
                             mint = data.get("mint", "")
                             if not mint or mint in seen:
-                                
+                                continue
+                            seen.add(mint)
+                            name = data.get("name", "?")
+                            symbol = data.get("symbol", "?")
+                            await asyncio.sleep(2)
+                            async with session.get(f"https://frontend-api.pump.fun/coins/{mint}", timeout=aiohttp.ClientTimeout(total=5)) as r:
+                                if r.status != 200:
+                                    continue
+                                info = await r.json()
+                                mcap = info.get("usd_market_cap", 0)
+                                twitter = info.get("twitter", "")
+                                nsfw = info.get("nsfw", True)
+                                if nsfw or not twitter or mcap > 100000:
+                                    continue
+                                await app.bot.send_message(chat_id,
+                                    f"TOKEN DITEMUKAN!\n"
+                                    f"{name} ({symbol})\n"
+                                    f"MCap: ${mcap:,.0f}\n"
+                                    f"Target 2x: ${mcap*2:,.0f}\n"
+                                    f"Twitter: {twitter}\n"
+                                    f"pump.fun/{mint}"
+                                )
+                        except asyncio.TimeoutError:
+                            continue
+        except Exception as e:
+            logging.error(e)
+            if scan_active:
+                await asyncio.sleep(5)
+
+async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global scan_active
+    if scan_active:
+        await update.message.reply_text("Sudah jalan!")
+        return
+    scan_active = True
+    asyncio.create_task(scan_tokens(update.effective_chat.id, context.application))
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("scan", scan))
+    app.add_handler(CommandHandler("stopscan", stopscan))
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
