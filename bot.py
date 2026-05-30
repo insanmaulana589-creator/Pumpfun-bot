@@ -35,10 +35,6 @@ async def check_token_safety(mint, session):
                 return None
             if mcap < 5000 or mcap > 50000:
                 return None
-            if total_supply > 0:
-                dev_pct = (dev_holdings / total_supply) * 100
-                if dev_pct > 10:
-                    return None
 
             return {
                 "mcap": mcap,
