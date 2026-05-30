@@ -51,8 +51,7 @@ async def monitor_and_exit(mint, name, buy_mcap, chat_id, app):
                             f"{name}\n"
                             f"Buy MCap: ${buy_mcap:,.0f}\n"
                             f"Sell MCap: ${current_mcap:,.0f}\n"
-                            f"Loss: {pct:.1f}%\n"
-                            f"Est: -{BUY_AMOUNT*(1-change):.3f} SOL\n\n"
+                            f"Loss: {pct:.1f}%\n\n"
                             f"Mencari token berikutnya..."
                         )
                         current_position = None
@@ -60,25 +59,9 @@ async def monitor_and_exit(mint, name, buy_mcap, chat_id, app):
             except Exception as e:
                 logging.error(e)
 
-async def check_graduated(mint, session):
-    try:
-        url = f"https://frontend-api.pump.fun/coins/{mint}"
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
-            if r.status != 200:
-                return False
-            data = await r.json()
-            complete = data.get("complete", False)
-            raydium_pool = data.get("raydium_pool", None)
-            return complete and raydium_pool
-    except:
-        return False
-
 async def scan_tokens(chat_id, app):
     global scan_active, seen, current_position
-    await app.bot.send_message(chat_id,
-        "Scanner Graduated aktif!\n"
-        "Hanya token yang sudah migrasi ke Raydium!"
-    )
+    await app.bot.send_message(chat_id, "Scanner aktif!\nMencari token graduated + Twitter...")
 
     while scan_active:
         if current_position:
@@ -110,11 +93,6 @@ async def scan_tokens(chat_id, app):
                                 website = link.get("url", "")
                         if not twitter:
                             continue
-
-                        graduated = await check_graduated(mint, session)
-                        if not graduated:
-                            continue
-
                         url2 = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
                         async with session.get(url2, timeout=aiohttp.ClientTimeout(total=8)) as r2:
                             if r2.status != 200:
@@ -123,13 +101,8 @@ async def scan_tokens(chat_id, app):
                             pairs = data.get("pairs", [])
                             if not pairs:
                                 continue
-                            pair = None
-                            for p in pairs:
-                                if p.get("dexId") == "raydium":
-                                    pair = p
-                                    break
-                            if not pair:
-                                continue
+                            pair = pairs[0]
+                            dex = pair.get("dexId", "")
                             price = float(pair.get("priceUsd", 0) or 0)
                             mcap = float(pair.get("marketCap", 0) or 0)
                             liquidity = float(pair.get("liquidity", {}).get("usd", 0) or 0)
@@ -141,10 +114,12 @@ async def scan_tokens(chat_id, app):
 
                             if price <= 0 or mcap <= 0:
                                 continue
-                            if liquidity < 5000:
+                            if liquidity < 3000:
                                 continue
                             if buys < sells:
                                 continue
+
+                            label = "TOKEN GRADUATED!" if dex == "raydium" else "TOKEN BARU!"
 
                             name = token.get("description", mint[:8])[:30]
                             current_position = {
@@ -154,12 +129,12 @@ async def scan_tokens(chat_id, app):
                             }
 
                             await app.bot.send_message(chat_id,
-                                f"TOKEN GRADUATED!\n\n"
+                                f"{label}\n\n"
                                 f"{name}\n"
-                                f"Sudah migrasi ke Raydium\n"
+                                f"DEX: {dex}\n"
                                 f"Buy di MCap: ${mcap:,.0f}\n"
-                                f"Target 2x MCap: ${mcap*2:,.0f}\n"
-                                f"Stop loss MCap: ${mcap*0.5:,.0f}\n"
+                                f"Target 2x: ${mcap*2:,.0f}\n"
+                                f"Stop loss: ${mcap*0.5:,.0f}\n"
                                 f"Liquidity: ${liquidity:,.0f}\n"
                                 f"Volume 5m: ${volume5m:,.0f}\n"
                                 f"Pump 5m: {change5m:.1f}%\n"
@@ -182,11 +157,10 @@ async def scan_tokens(chat_id, app):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = f"Posisi: {current_position['name']}" if current_position else "Tidak ada posisi"
     await update.message.reply_text(
-        f"Pumpfun Graduated Bot\n\n"
+        f"Pumpfun Bot\n\n"
         f"Buy: {BUY_AMOUNT} SOL\n"
         f"Take Profit: {TAKE_PROFIT}x\n"
         f"Stop Loss: {int(STOP_LOSS*100)}%\n"
-        f"Filter: Graduated ke Raydium\n"
         f"{status}\n\n"
         "/scan - Mulai\n"
         "/stopscan - Stop\n"
