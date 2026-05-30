@@ -11,10 +11,9 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 
 scan_active = False
-buy_amount = 0.2
 tracked_tokens = {}
 
-async def check_token_safety(mint, session):
+async def check_token(mint, session):
     try:
         url = f"https://frontend-api.pump.fun/coins/{mint}"
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
@@ -25,35 +24,66 @@ async def check_token_safety(mint, session):
             mcap = data.get("usd_market_cap", 0)
             nsfw = data.get("nsfw", True)
             complete = data.get("complete", False)
-            total_supply = data.get("total_supply", 1)
-            dev_holdings = data.get("creator_token_holdings", 0)
             reply_count = data.get("reply_count", 0)
+            twitter = data.get("twitter", "")
+            website = data.get("website", "")
+            telegram = data.get("telegram", "")
+            description = data.get("description", "")
 
             if nsfw:
                 return None
             if complete:
                 return None
-            if mcap < 5000 or mcap > 50000:
+            if mcap < 5000 or mcap > 30000:
+                return None
+            if reply_count < 5:
+                return None
+
+            score = 0
+            socials = []
+
+            if twitter:
+                score += 30
+                socials.append("X/Twitter")
+            if website:
+                score += 20
+                socials.append("Website")
+            if telegram:
+                score += 20
+                socials.append("Telegram")
+            if reply_count > 10:
+                score += 15
+            if reply_count > 20:
+                score += 15
+            if description and len(description) > 50:
+                score += 10
+
+            if score < 50:
                 return None
 
             return {
                 "mcap": mcap,
                 "reply_count": reply_count,
-                "dev_pct": dev_pct if total_supply > 0 else 0,
+                "twitter": twitter,
+                "website": website,
+                "telegram": telegram,
+                "description": description[:100],
+                "score": score,
+                "socials": socials,
             }
     except Exception as e:
-        logging.error(f"Safety check error: {e}")
+        logging.error(f"Check error: {e}")
         return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Pumpfun Safety Bot\n\n"
+        "Pumpfun Safety Scanner\n\n"
         "Filter aktif:\n"
-        "MCap $5k-$50k\n"
-        "Dev holdings kurang dari 10 persen\n"
-        "Bukan NSFW\n"
-        "Belum bonding curve selesai\n"
-        "Take Profit: 2x\n\n"
+        "MCap $5k-$30k\n"
+        "Reply lebih dari 5\n"
+        "Punya Twitter/X\n"
+        "Score minimal 50\n"
+        "Bukan NSFW\n\n"
         "/scan - Mulai scan\n"
         "/stopscan - Stop scan\n"
         "/positions - Lihat posisi\n"
@@ -66,14 +96,15 @@ async def stopscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not tracked_tokens:
-        await update.message.reply_text("Tidak ada posisi aktif.")
+        await update.message.reply_text("Tidak ada token yang ditemukan.")
         return
-    msg = "Posisi Aktif:\n\n"
+    msg = "Token Ditemukan:\n\n"
     for mint, data in tracked_tokens.items():
         msg += (
             f"Nama: {data['name']} ({data['symbol']})\n"
-            f"Buy MCap: ${data['buy_mcap']:,.0f}\n"
-            f"Target 2x: ${data['target_mcap']:,.0f}\n\n"
+            f"MCap: ${data['mcap']:,.0f}\n"
+            f"Score: {data['score']}\n"
+            f"Link: pump.fun/{mint}\n\n"
         )
     await update.message.reply_text(msg)
 
@@ -82,10 +113,8 @@ async def scan_tokens(chat_id, app):
     seen_mints = set()
 
     await app.bot.send_message(chat_id,
-        "Scanning dimulai dengan filter safety!\n"
-        "MCap $5k-$50k\n"
-        "Dev kurang dari 10 persen\n"
-        "Anti NSFW dan rugpull"
+        "Scanner dimulai!\n"
+        "Mencari token safe dengan potensi 1M mcap..."
     )
 
     uri = "wss://pumpportal.fun/api/data"
@@ -109,36 +138,33 @@ async def scan_tokens(chat_id, app):
 
                             name = data.get("name", "Unknown")
                             symbol = data.get("symbol", "???")
-
                             seen_mints.add(mint)
 
-                            await asyncio.sleep(2)
-                            safety = await check_token_safety(mint, session)
+                            await asyncio.sleep(3)
+                            info = await check_token(mint, session)
 
-                            if not safety:
+                            if not info:
                                 continue
-
-                            mcap = safety["mcap"]
-                            dev_pct = safety["dev_pct"]
-                            replies = safety["reply_count"]
-                            target_mcap = mcap * 2
 
                             tracked_tokens[mint] = {
                                 "name": name,
                                 "symbol": symbol,
-                                "buy_mcap": mcap,
-                                "target_mcap": target_mcap,
+                                "mcap": info["mcap"],
+                                "score": info["score"],
                             }
 
+                            socials_text = ", ".join(info["socials"]) if info["socials"] else "Tidak ada"
+
                             msg_text = (
-                                f"TOKEN AMAN DITEMUKAN!\n\n"
+                                f"TOKEN POTENSIAL!\n\n"
                                 f"Nama: {name} ({symbol})\n"
-                                f"MCap: ${mcap:,.0f}\n"
-                                f"Dev holdings: {dev_pct:.1f} persen\n"
-                                f"Replies: {replies}\n"
-                                f"Target 2x: ${target_mcap:,.0f}\n"
-                                f"Simulasi buy {buy_amount} SOL\n"
-                                f"Link: pump.fun/{mint}"
+                                f"MCap: ${info['mcap']:,.0f}\n"
+                                f"Replies: {info['reply_count']}\n"
+                                f"Socials: {socials_text}\n"
+                                f"Score: {info['score']}/100\n"
+                                f"Deskripsi: {info['description']}\n\n"
+                                f"Link: pump.fun/{mint}\n\n"
+                                f"Keputusan buy ada di tangan Anda!"
                             )
                             await app.bot.send_message(chat_id, msg_text)
 
@@ -165,7 +191,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - Info bot\n"
         "/scan - Mulai scan\n"
         "/stopscan - Stop scan\n"
-        "/positions - Posisi aktif"
+        "/positions - Token ditemukan"
     )
 
 def main():
