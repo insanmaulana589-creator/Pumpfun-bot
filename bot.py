@@ -60,7 +60,8 @@ async def scan_tokens(chat_id, app):
                             f"{name}\n"
                             f"Twitter: {twitter}\n"
                             f"Website: {website if website else 'Tidak ada'}\n"
-                            f"dexscreener.com/solana/{mint}\n"
+                            f"CA: {mint}\n"
+f"dexscreener.com/solana/{mint}\n"
                             f"Target 2x!"
                         )
         except Exception as e:
