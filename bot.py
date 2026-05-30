@@ -61,7 +61,10 @@ async def monitor_and_exit(mint, name, buy_mcap, chat_id, app):
 
 async def scan_tokens(chat_id, app):
     global scan_active, seen, current_position
-    await app.bot.send_message(chat_id, "Scanner aktif!\nMencari token graduated + Twitter...")
+    await app.bot.send_message(chat_id,
+        "Scanner aktif!\n"
+        "Filter: MCap $20k-$100k + Twitter + Raydium"
+    )
 
     while scan_active:
         if current_position:
@@ -114,12 +117,14 @@ async def scan_tokens(chat_id, app):
 
                             if price <= 0 or mcap <= 0:
                                 continue
+                            if mcap < 20000 or mcap > 100000:
+                                continue
                             if liquidity < 3000:
                                 continue
                             if buys < sells:
                                 continue
-
-                            label = "TOKEN GRADUATED!" if dex == "raydium" else "TOKEN BARU!"
+                            if dex != "raydium":
+                                continue
 
                             name = token.get("description", mint[:8])[:30]
                             current_position = {
@@ -129,9 +134,9 @@ async def scan_tokens(chat_id, app):
                             }
 
                             await app.bot.send_message(chat_id,
-                                f"{label}\n\n"
+                                f"TOKEN GRADUATED!\n\n"
                                 f"{name}\n"
-                                f"DEX: {dex}\n"
+                                f"DEX: Raydium\n"
                                 f"Buy di MCap: ${mcap:,.0f}\n"
                                 f"Target 2x: ${mcap*2:,.0f}\n"
                                 f"Stop loss: ${mcap*0.5:,.0f}\n"
@@ -157,10 +162,11 @@ async def scan_tokens(chat_id, app):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = f"Posisi: {current_position['name']}" if current_position else "Tidak ada posisi"
     await update.message.reply_text(
-        f"Pumpfun Bot\n\n"
+        f"Pumpfun Graduated Bot\n\n"
         f"Buy: {BUY_AMOUNT} SOL\n"
         f"Take Profit: {TAKE_PROFIT}x\n"
         f"Stop Loss: {int(STOP_LOSS*100)}%\n"
+        f"Filter: MCap $20k-$100k\n"
         f"{status}\n\n"
         "/scan - Mulai\n"
         "/stopscan - Stop\n"
