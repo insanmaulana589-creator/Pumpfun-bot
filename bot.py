@@ -2,13 +2,14 @@ import os
 import logging
 import asyncio
 import json
-import websockets
+import aiohttp
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 scan_active = False
+seen = set()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -23,41 +24,48 @@ async def stopscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Stop!")
 
 async def scan_tokens(chat_id, app):
-    global scan_active
-    seen = set()
-    await app.bot.send_message(chat_id, "Scanning realtime...")
+    global scan_active, seen
+    await app.bot.send_message(chat_id, "Scanning realtime via DexScreener...")
+    
     while scan_active:
         try:
-            async with websockets.connect("wss://pumpportal.fun/api/data") as ws:
-                await ws.send(json.dumps({"method": "subscribeNewToken"}))
-                while scan_active:
-                    try:
-                        data = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
-                        mint = data.get("mint", "")
+            async with aiohttp.ClientSession() as session:
+                url = "https://api.dexscreener.com/token-profiles/latest/v1"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                    if r.status != 200:
+                        await asyncio.sleep(3)
+                        continue
+                    tokens = await r.json()
+                    for token in tokens:
+                        mint = token.get("tokenAddress", "")
+                        chain = token.get("chainId", "")
                         if not mint or mint in seen:
                             continue
+                        if chain != "solana":
+                            continue
                         seen.add(mint)
-                        name = data.get("name", "?")
-                        symbol = data.get("symbol", "?")
-                        twitter = data.get("twitter", "")
-                        website = data.get("website", "")
-                        mcap_sol = data.get("initialBuy", 0)
+                        name = token.get("description", "Unknown")
+                        links = token.get("links", [])
+                        twitter = ""
+                        website = ""
+                        for link in links:
+                            if link.get("type") == "twitter":
+                                twitter = link.get("url", "")
+                            if link.get("type") == "website":
+                                website = link.get("url", "")
                         if not twitter:
                             continue
                         await app.bot.send_message(chat_id,
-                            f"TOKEN BARU!\n"
-                            f"{name} ({symbol})\n"
+                            f"TOKEN BARU SOLANA!\n"
+                            f"{name}\n"
                             f"Twitter: {twitter}\n"
                             f"Website: {website if website else 'Tidak ada'}\n"
-                            f"pump.fun/{mint}\n"
-                            f"Target 2x - keputusan di tangan Anda!"
+                            f"dexscreener.com/solana/{mint}\n"
+                            f"Target 2x!"
                         )
-                    except asyncio.TimeoutError:
-                        continue
         except Exception as e:
             logging.error(e)
-            if scan_active:
-                await asyncio.sleep(3)
+        await asyncio.sleep(5)
 
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global scan_active
