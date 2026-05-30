@@ -2,6 +2,8 @@ import os
 import logging
 import asyncio
 import aiohttp
+import json
+import websockets
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -13,6 +15,44 @@ current_position = None
 BUY_AMOUNT = 0.2
 TAKE_PROFIT = 2.0
 STOP_LOSS = 0.5
+
+async def get_dex_info(mint, session):
+    try:
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+            if r.status != 200:
+                return None
+            data = await r.json()
+            pairs = data.get("pairs", [])
+            if not pairs:
+                return None
+            for pair in pairs:
+                dex = pair.get("dexId", "")
+                mcap = float(pair.get("marketCap", 0) or 0)
+                liquidity = float(pair.get("liquidity", {}).get("usd", 0) or 0)
+                buys = pair.get("txns", {}).get("m5", {}).get("buys", 0)
+                sells = pair.get("txns", {}).get("m5", {}).get("sells", 0)
+                change5m = float(pair.get("priceChange", {}).get("m5", 0) or 0)
+                change1h = float(pair.get("priceChange", {}).get("h1", 0) or 0)
+                volume5m = float(pair.get("volume", {}).get("m5", 0) or 0)
+                if dex != "raydium":
+                    continue
+                if mcap < 20000 or mcap > 150000:
+                    continue
+                if liquidity < 5000:
+                    continue
+                return {
+                    "mcap": mcap,
+                    "liquidity": liquidity,
+                    "buys": buys,
+                    "sells": sells,
+                    "change5m": change5m,
+                    "change1h": change1h,
+                    "volume5m": volume5m,
+                }
+        return None
+    except:
+        return None
 
 async def monitor_and_exit(mint, name, buy_mcap, chat_id, app):
     global current_position
@@ -63,101 +103,79 @@ async def scan_tokens(chat_id, app):
     global scan_active, seen, current_position
     await app.bot.send_message(chat_id,
         "Scanner aktif!\n"
-        "Filter: MCap $20k-$100k + Twitter + Raydium"
+        "WebSocket Pump.fun + Filter Raydium\n"
+        "MCap $20k-$150k"
     )
 
+    uri = "wss://pumpportal.fun/api/data"
+
     while scan_active:
-        if current_position:
-            await asyncio.sleep(3)
-            continue
         try:
-            async with aiohttp.ClientSession() as session:
-                url = "https://api.dexscreener.com/token-profiles/latest/v1"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
-                    if r.status != 200:
-                        await asyncio.sleep(3)
-                        continue
-                    tokens = await r.json()
-                    for token in tokens:
+            async with websockets.connect(uri) as ws:
+                await ws.send(json.dumps({"method": "subscribeNewToken"}))
+                await app.bot.send_message(chat_id, "Terhubung ke Pump.fun!")
+
+                async with aiohttp.ClientSession() as session:
+                    while scan_active:
                         if current_position:
-                            break
-                        mint = token.get("tokenAddress", "")
-                        chain = token.get("chainId", "")
-                        if not mint or mint in seen or chain != "solana":
+                            await asyncio.sleep(3)
                             continue
-                        seen.add(mint)
-                        links = token.get("links", [])
-                        twitter = ""
-                        website = ""
-                        for link in links:
-                            if link.get("type") == "twitter":
-                                twitter = link.get("url", "")
-                            if link.get("type") == "website":
-                                website = link.get("url", "")
-                        if not twitter:
-                            continue
-                        url2 = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
-                        async with session.get(url2, timeout=aiohttp.ClientTimeout(total=8)) as r2:
-                            if r2.status != 200:
+                        try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                            data = json.loads(msg)
+                            mint = data.get("mint", "")
+                            if not mint or mint in seen:
                                 continue
-                            data = await r2.json()
-                            pairs = data.get("pairs", [])
-                            if not pairs:
-                                continue
-                            pair = pairs[0]
-                            dex = pair.get("dexId", "")
-                            price = float(pair.get("priceUsd", 0) or 0)
-                            mcap = float(pair.get("marketCap", 0) or 0)
-                            liquidity = float(pair.get("liquidity", {}).get("usd", 0) or 0)
-                            volume5m = float(pair.get("volume", {}).get("m5", 0) or 0)
-                            buys = pair.get("txns", {}).get("m5", {}).get("buys", 0)
-                            sells = pair.get("txns", {}).get("m5", {}).get("sells", 0)
-                            change5m = float(pair.get("priceChange", {}).get("m5", 0) or 0)
-                            change1h = float(pair.get("priceChange", {}).get("h1", 0) or 0)
+                            seen.add(mint)
+                            name = data.get("name", "Unknown")
+                            symbol = data.get("symbol", "???")
+                            twitter = data.get("twitter", "")
+                            website = data.get("website", "")
 
-                            if price <= 0 or mcap <= 0:
-                                continue
-                            if mcap < 20000 or mcap > 100000:
-                                continue
-                            if liquidity < 3000:
-                                continue
-                            if buys < sells:
-                                continue
-                            if dex != "raydium":
+                            await asyncio.sleep(60)
+
+                            info = await get_dex_info(mint, session)
+                            if not info:
                                 continue
 
-                            name = token.get("description", mint[:8])[:30]
                             current_position = {
                                 "mint": mint,
                                 "name": name,
-                                "buy_mcap": mcap,
+                                "buy_mcap": info["mcap"],
                             }
 
                             await app.bot.send_message(chat_id,
                                 f"TOKEN GRADUATED!\n\n"
-                                f"{name}\n"
+                                f"{name} ({symbol})\n"
                                 f"DEX: Raydium\n"
-                                f"Buy di MCap: ${mcap:,.0f}\n"
-                                f"Target 2x: ${mcap*2:,.0f}\n"
-                                f"Stop loss: ${mcap*0.5:,.0f}\n"
-                                f"Liquidity: ${liquidity:,.0f}\n"
-                                f"Volume 5m: ${volume5m:,.0f}\n"
-                                f"Pump 5m: {change5m:.1f}%\n"
-                                f"Pump 1h: {change1h:.1f}%\n"
-                                f"Buy/Sell: {buys}/{sells}\n"
-                                f"Twitter: {twitter}\n"
+                                f"Buy MCap: ${info['mcap']:,.0f}\n"
+                                f"Target 2x: ${info['mcap']*2:,.0f}\n"
+                                f"Stop loss: ${info['mcap']*0.5:,.0f}\n"
+                                f"Liquidity: ${info['liquidity']:,.0f}\n"
+                                f"Volume 5m: ${info['volume5m']:,.0f}\n"
+                                f"Pump 5m: {info['change5m']:.1f}%\n"
+                                f"Pump 1h: {info['change1h']:.1f}%\n"
+                                f"Buy/Sell: {info['buys']}/{info['sells']}\n"
+                                f"Twitter: {twitter if twitter else 'Tidak ada'}\n"
                                 f"Website: {website if website else 'Tidak ada'}\n"
                                 f"CA: {mint}\n\n"
                                 f"Simulasi buy {BUY_AMOUNT} SOL\n"
                                 f"dexscreener.com/solana/{mint}"
                             )
                             asyncio.create_task(
-                                monitor_and_exit(mint, name, mcap, chat_id, app)
+                                monitor_and_exit(mint, name, info["mcap"], chat_id, app)
                             )
-                            break
+
+                        except asyncio.TimeoutError:
+                            continue
+                        except Exception as e:
+                            logging.error(e)
+
         except Exception as e:
-            logging.error(e)
-        await asyncio.sleep(5)
+            logging.error(f"WS error: {e}")
+            if scan_active:
+                await app.bot.send_message(chat_id, "Reconnecting...")
+                await asyncio.sleep(5)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = f"Posisi: {current_position['name']}" if current_position else "Tidak ada posisi"
@@ -166,7 +184,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Buy: {BUY_AMOUNT} SOL\n"
         f"Take Profit: {TAKE_PROFIT}x\n"
         f"Stop Loss: {int(STOP_LOSS*100)}%\n"
-        f"Filter: MCap $20k-$100k\n"
+        f"Filter: Raydium MCap $20k-$150k\n"
         f"{status}\n\n"
         "/scan - Mulai\n"
         "/stopscan - Stop\n"
