@@ -14,7 +14,7 @@ BUY_AMOUNT = 0.2
 TAKE_PROFIT = 2.0
 STOP_LOSS = 0.5
 
-async def monitor_and_exit(mint, name, buy_price, chat_id, app):
+async def monitor_and_exit(mint, name, buy_mcap, chat_id, app):
     global current_position
     async with aiohttp.ClientSession() as session:
         while current_position:
@@ -28,15 +28,17 @@ async def monitor_and_exit(mint, name, buy_price, chat_id, app):
                     pairs = data.get("pairs", [])
                     if not pairs:
                         continue
-                    current = float(pairs[0].get("priceUsd", 0) or 0)
-                    if not current:
+                    current_mcap = float(pairs[0].get("marketCap", 0) or 0)
+                    if not current_mcap:
                         continue
-                    change = current / buy_price
+                    change = current_mcap / buy_mcap
                     pct = (change - 1) * 100
                     if change >= TAKE_PROFIT:
                         await app.bot.send_message(chat_id,
                             f"TAKE PROFIT!\n"
                             f"{name}\n"
+                            f"Buy MCap: ${buy_mcap:,.0f}\n"
+                            f"Sell MCap: ${current_mcap:,.0f}\n"
                             f"Profit: +{pct:.1f}%\n"
                             f"Est: +{BUY_AMOUNT*(change-1):.3f} SOL\n\n"
                             f"Mencari token berikutnya..."
@@ -47,7 +49,10 @@ async def monitor_and_exit(mint, name, buy_price, chat_id, app):
                         await app.bot.send_message(chat_id,
                             f"STOP LOSS!\n"
                             f"{name}\n"
+                            f"Buy MCap: ${buy_mcap:,.0f}\n"
+                            f"Sell MCap: ${current_mcap:,.0f}\n"
                             f"Loss: {pct:.1f}%\n"
+                            f"Est: -{BUY_AMOUNT*(1-change):.3f} SOL\n\n"
                             f"Mencari token berikutnya..."
                         )
                         current_position = None
@@ -57,7 +62,7 @@ async def monitor_and_exit(mint, name, buy_price, chat_id, app):
 
 async def scan_tokens(chat_id, app):
     global scan_active, seen, current_position
-    await app.bot.send_message(chat_id, "Scanner aktif! Mencari token...")
+    await app.bot.send_message(chat_id, "Scanner DexScreener aktif!")
 
     while scan_active:
         if current_position:
@@ -107,7 +112,7 @@ async def scan_tokens(chat_id, app):
                             change5m = float(pair.get("priceChange", {}).get("m5", 0) or 0)
                             change1h = float(pair.get("priceChange", {}).get("h1", 0) or 0)
 
-                            if price <= 0:
+                            if price <= 0 or mcap <= 0:
                                 continue
                             if liquidity < 3000:
                                 continue
@@ -118,25 +123,28 @@ async def scan_tokens(chat_id, app):
                             current_position = {
                                 "mint": mint,
                                 "name": name,
-                                "buy_price": price,
+                                "buy_mcap": mcap,
                             }
 
                             await app.bot.send_message(chat_id,
                                 f"TOKEN DITEMUKAN!\n\n"
                                 f"{name}\n"
-                                f"MCap: ${mcap:,.0f}\n"
+                                f"Buy di MCap: ${mcap:,.0f}\n"
+                                f"Target 2x MCap: ${mcap*2:,.0f}\n"
+                                f"Stop loss MCap: ${mcap*0.5:,.0f}\n"
                                 f"Liquidity: ${liquidity:,.0f}\n"
                                 f"Volume 5m: ${volume5m:,.0f}\n"
                                 f"Pump 5m: {change5m:.1f}%\n"
                                 f"Pump 1h: {change1h:.1f}%\n"
                                 f"Buy/Sell: {buys}/{sells}\n"
                                 f"Twitter: {twitter}\n"
+                                f"Website: {website if website else 'Tidak ada'}\n"
                                 f"CA: {mint}\n\n"
                                 f"Simulasi buy {BUY_AMOUNT} SOL\n"
-                                f"Target 2x | Stop loss 50%"
+                                f"dexscreener.com/solana/{mint}"
                             )
                             asyncio.create_task(
-                                monitor_and_exit(mint, name, price, chat_id, app)
+                                monitor_and_exit(mint, name, mcap, chat_id, app)
                             )
                             break
         except Exception as e:
@@ -168,7 +176,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Posisi Aktif:\n"
         f"{current_position['name']}\n"
-        f"Buy: ${current_position['buy_price']:.8f}\n"
+        f"Buy MCap: ${current_position['buy_mcap']:,.0f}\n"
+        f"Target 2x: ${current_position['buy_mcap']*2:,.0f}\n"
         f"CA: {current_position['mint']}"
     )
 
