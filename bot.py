@@ -31,20 +31,28 @@ async def get_token_info(mint, session):
             volume_5m = float(pair.get("volume", {}).get("m5", 0) or 0)
             change_5m = float(pair.get("priceChange", {}).get("m5", 0) or 0)
             change_1h = float(pair.get("priceChange", {}).get("h1", 0) or 0)
-            buys = pair.get("txns", {}).get("m5", {}).get("buys", 0)
-            sells = pair.get("txns", {}).get("m5", {}).get("sells", 0)
+            buys_5m = pair.get("txns", {}).get("m5", {}).get("buys", 0)
+            sells_5m = pair.get("txns", {}).get("m5", {}).get("sells", 0)
+            buys_1h = pair.get("txns", {}).get("h1", {}).get("buys", 0)
+            sells_1h = pair.get("txns", {}).get("h1", {}).get("sells", 0)
+            total_tx_5m = buys_5m + sells_5m
+            total_tx_1h = buys_1h + sells_1h
+
             if price <= 0:
                 return None
             if mcap <= 0 or mcap > 500000:
                 return None
-            if liquidity < 2000:
+            if liquidity < 5000:
                 return None
-            if change_5m < 10:
+            if change_5m < 5:
                 return None
-            if volume_5m < 500:
+            if volume_5m < 1000:
                 return None
-            if buys < sells:
+            if total_tx_5m < 50:
                 return None
+            if buys_5m < sells_5m:
+                return None
+
             return {
                 "price": price,
                 "mcap": mcap,
@@ -52,8 +60,10 @@ async def get_token_info(mint, session):
                 "volume_5m": volume_5m,
                 "change_5m": change_5m,
                 "change_1h": change_1h,
-                "buys": buys,
-                "sells": sells,
+                "buys_5m": buys_5m,
+                "sells_5m": sells_5m,
+                "total_tx_5m": total_tx_5m,
+                "total_tx_1h": total_tx_1h,
             }
     except Exception as e:
         logging.error(f"Error: {e}")
@@ -108,9 +118,12 @@ async def monitor_and_exit(mint, name, buy_price, chat_id, app):
 async def scan_tokens(chat_id, app):
     global scan_active, seen, current_position
     await app.bot.send_message(chat_id,
-        "Scanner Agresif aktif!\n"
-        "Cari token pump lebih dari 10% per 5 menit\n"
-        "Buy pressure kuat\n"
+        "Scanner TX Tinggi aktif!\n"
+        "Filter:\n"
+        "TX 5m lebih dari 50\n"
+        "Buy lebih dari sell\n"
+        "Pump lebih dari 5% per 5m\n"
+        "Volume lebih dari $1k\n"
         "1 token at a time!"
     )
 
@@ -151,13 +164,15 @@ async def scan_tokens(chat_id, app):
                             "buy_price": info["price"],
                         }
                         await app.bot.send_message(chat_id,
-                            f"TOKEN AGRESIF DITEMUKAN!\n\n"
+                            f"TOKEN DITEMUKAN!\n\n"
                             f"{name}\n"
                             f"MCap: ${info['mcap']:,.0f}\n"
                             f"Pump 5m: +{info['change_5m']:.1f}%\n"
                             f"Pump 1h: +{info['change_1h']:.1f}%\n"
+                            f"TX 5m: {info['total_tx_5m']}\n"
+                            f"Buy/Sell 5m: {info['buys_5m']}/{info['sells_5m']}\n"
+                            f"TX 1h: {info['total_tx_1h']}\n"
                             f"Volume 5m: ${info['volume_5m']:,.0f}\n"
-                            f"Buy/Sell: {info['buys']}/{info['sells']}\n"
                             f"Liquidity: ${info['liquidity']:,.0f}\n"
                             f"Twitter: {twitter}\n"
                             f"CA: {mint}\n\n"
@@ -175,11 +190,10 @@ async def scan_tokens(chat_id, app):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = f"Posisi: {current_position['name']}" if current_position else "Tidak ada posisi"
     await update.message.reply_text(
-        f"Pumpfun Agresif Bot\n\n"
+        f"Pumpfun TX Bot\n\n"
         f"Buy: {BUY_AMOUNT} SOL\n"
         f"Take Profit: {TAKE_PROFIT}x\n"
         f"Stop Loss: {int(STOP_LOSS*100)}%\n"
-        f"Filter: Pump lebih dari 10% per 5m\n"
         f"{status}\n\n"
         "/scan - Mulai\n"
         "/stopscan - Stop\n"
