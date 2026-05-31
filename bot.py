@@ -9,6 +9,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
+HELIUS_RPC = os.environ.get("HELIUS_RPC")
 scan_active = False
 seen = set()
 current_position = None
@@ -35,7 +36,7 @@ async def get_dex_info(mint, session):
                 change5m = float(pair.get("priceChange", {}).get("m5", 0) or 0)
                 change1h = float(pair.get("priceChange", {}).get("h1", 0) or 0)
                 volume5m = float(pair.get("volume", {}).get("m5", 0) or 0)
-                if dex != "raydium":
+                if dex not in ["raydium", "pumpswap"]:
                     continue
                 if mcap < 20000 or mcap > 150000:
                     continue
@@ -49,9 +50,11 @@ async def get_dex_info(mint, session):
                     "change5m": change5m,
                     "change1h": change1h,
                     "volume5m": volume5m,
+                    "dex": dex,
                 }
         return None
-    except:
+    except Exception as e:
+        logging.error(f"DexScreener error: {e}")
         return None
 
 async def monitor_and_exit(mint, name, buy_mcap, chat_id, app):
@@ -103,8 +106,8 @@ async def scan_tokens(chat_id, app):
     global scan_active, seen, current_position
     await app.bot.send_message(chat_id,
         "Scanner aktif!\n"
-        "WebSocket Pump.fun + Filter Raydium\n"
-        "MCap $20k-$150k"
+        "WebSocket + Helius RPC\n"
+        "Filter: Raydium/PumpSwap MCap $20k-$150k"
     )
 
     uri = "wss://pumpportal.fun/api/data"
@@ -132,7 +135,7 @@ async def scan_tokens(chat_id, app):
                             twitter = data.get("twitter", "")
                             website = data.get("website", "")
 
-                            await asyncio.sleep(60)
+                            await asyncio.sleep(30)
 
                             info = await get_dex_info(mint, session)
                             if not info:
@@ -145,9 +148,9 @@ async def scan_tokens(chat_id, app):
                             }
 
                             await app.bot.send_message(chat_id,
-                                f"TOKEN GRADUATED!\n\n"
+                                f"TOKEN DITEMUKAN!\n\n"
                                 f"{name} ({symbol})\n"
-                                f"DEX: Raydium\n"
+                                f"DEX: {info['dex']}\n"
                                 f"Buy MCap: ${info['mcap']:,.0f}\n"
                                 f"Target 2x: ${info['mcap']*2:,.0f}\n"
                                 f"Stop loss: ${info['mcap']*0.5:,.0f}\n"
@@ -180,11 +183,11 @@ async def scan_tokens(chat_id, app):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = f"Posisi: {current_position['name']}" if current_position else "Tidak ada posisi"
     await update.message.reply_text(
-        f"Pumpfun Graduated Bot\n\n"
+        f"Pumpfun Bot v2\n\n"
         f"Buy: {BUY_AMOUNT} SOL\n"
         f"Take Profit: {TAKE_PROFIT}x\n"
         f"Stop Loss: {int(STOP_LOSS*100)}%\n"
-        f"Filter: Raydium MCap $20k-$150k\n"
+        f"RPC: Helius\n"
         f"{status}\n\n"
         "/scan - Mulai\n"
         "/stopscan - Stop\n"
